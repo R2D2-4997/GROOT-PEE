@@ -1,0 +1,22 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Définition de la table qui va stocker les résultats de l'IA
+model Document {
+  id               String   @id @default(uuid())
+  nomFichier       String
+  cheminStockage   String   // L'endroit physique où le fichier sera stocké
+  categorie        String
+  labelProjet      String?
+  expediteur       String
+  dateReception    DateTime @default(now())
+  resume           String?
+  typeDocument  String?
+  motsCles      String? 
+}
