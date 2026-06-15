@@ -4,10 +4,13 @@ interface Document {
   id: string;
   nomFichier: string;
   cheminStockage: string;
+  domaineDetecte?: string;
   categorie: string;
   labelProjet: string;
   resume: string;
   expediteur: string;
+  plateforme?: string;
+  dateReception?: string;
   typeDocument?: string;
   motsCles?: string;
 }
@@ -28,8 +31,6 @@ function App() {
   const [isUploading, setIsUploading] = useState(false);
   
   const [exportingProject, setExportingProject] = useState<string | null>(null);
-  
-  // 🌟 NOUVEAU : États pour gérer le menu des options d'export
   const [exportModalProject, setExportModalProject] = useState<string | null>(null);
   const [customExportPath, setCustomExportPath] = useState<string>('');
 
@@ -37,10 +38,11 @@ function App() {
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
 
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'bot', text: 'Bonjour. Je suis l\'IA de Beeper. Tapez n\'importe quel mot-clé (ex: un montant, une marque, un objet) pour retrouver vos documents.' }
+    { role: 'bot', text: 'Bonjour. Je suis l\'IA de Beeper. Que cherchez-vous aujourd\'hui ? (ex: "Trouve moi le schéma de câblage du projet")' }
   ]);
   const [input, setInput] = useState('');
 
+  // Vérification du statut WhatsApp
   useEffect(() => {
     const fetchStatus = async () => {
       try {
@@ -59,6 +61,7 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Récupération des documents
   useEffect(() => {
     if (waStatus !== 'CONNECTE') return;
     const fetchDocs = async () => {
@@ -75,6 +78,7 @@ function App() {
     return () => clearInterval(interval);
   }, [waStatus]);
 
+  // Upload manuel de fichier
   const handleFileUpload = (e: any) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -100,65 +104,60 @@ function App() {
     };
   };
 
-  // 🌟 LE NOUVEAU MOTEUR DE RECHERCHE INTELLIGENT (Compréhension de phrases)
-  const handleSendMessage = (e: any) => {
+  // Moteur de recherche propulsé par le Backend
+  const handleSendMessage = async (e: any) => {
     e.preventDefault();
     if (!input.trim()) return;
 
     const userMsg = input.trim();
     setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
     setInput('');
+    
+    setMessages(prev => [...prev, { role: 'bot', text: '⏳ L\'IA analyse votre requête...' }]);
 
-    setTimeout(() => {
-      // 1. Dictionnaire des mots à ignorer pour comprendre le sens de la phrase
-      const motsInutiles = ['je', 'cherche', 'trouve', 'moi', 'le', 'la', 'les', 'un', 'une', 'des', 'de', 'du', 'a', 'au', 'aux', 'et', 'est', 'ce', 'que', 'qui', 'dans', 'pour', 'avec', 'document', 'fichier', 'affiche', 'montre', 'veux', 'voudrais', 'peux', 'tu', 'avoir', 'voir', 'sur'];
-      
-      // 2. Nettoyage de la phrase : on enlève la ponctuation, on découpe, et on garde les mots utiles
-      const motsRecherche = userMsg.toLowerCase()
-        .replace(/[.,!?']/g, ' ') // Remplace la ponctuation par des espaces
-        .split(/\s+/)             // Découpe chaque mot
-        .filter(mot => mot.length > 2 && !motsInutiles.includes(mot)); // Retire les mots courts et inutiles
+    try {
+      const response = await fetch('http://localhost:3001/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requete: userMsg })
+      });
 
-      // Sécurité : si l'utilisateur ne tape que "je veux voir", on garde sa phrase de base
-      const motsClefsFinaux = motsRecherche.length > 0 ? motsRecherche : userMsg.toLowerCase().split(/\s+/);
+      if (response.ok) {
+        const data = await response.json();
+        const resultats = data.resultats;
 
-      // 3. Calcul du "Score de pertinence" pour chaque document
-      const resultatsAvecScore = (documents || []).map(d => {
-        if (!d) return { doc: d, score: 0 };
+        let botReply = "Je n'ai trouvé aucun document correspondant à ces critères.";
         
-        // On fusionne tout le texte du document pour le scanner
-        const texteComplet = `${d.nomFichier} ${d.resume} ${d.categorie} ${d.labelProjet} ${d.motsCles || ''} ${d.typeDocument || ''}`.toLowerCase();
-        
-        let score = 0;
-        // On donne +1 point pour chaque mot-clé trouvé dans le document
-        motsClefsFinaux.forEach(mot => {
-          if (texteComplet.includes(mot)) {
-            score += 1;
-          }
-        });
-        
-        return { doc: d, score };
-      }).filter(item => item.score > 0); // On ne garde que les documents qui ont au moins 1 point
+        if (resultats.length > 0) {
+          const c = data.criteresIA;
+          let recap = `*Recherche ciblée : ${c.type_document_cible || 'Tout type'} | Projet: ${c.projet_cible || 'Tous'}*\n\n`;
+          
+          botReply = recap + `Voici les ${resultats.length} documents les plus pertinents :\n\n` + 
+            resultats.map((r: any) => `📄 **${r.nomFichier}**\n📂 Projet: ${r.labelProjet || '-'} | 📑 Type: ${r.typeDocument || 'Générique'}\n📝 ${r.resume || ''}`).join('\n\n');
+        }
 
-      // 4. Tri pour mettre le document avec le plus haut score en premier
-      resultatsAvecScore.sort((a, b) => b.score - a.score);
-      
-      const resultats = resultatsAvecScore.map(item => item.doc);
-
-      // 5. Réponse du Bot
-      let botReply = "Je n'ai trouvé aucun document correspondant à votre demande.";
-      
-      if (resultats.length > 0) {
-        botReply = `Voici ce que j'ai trouvé de plus pertinent (${resultats.length} résultat${resultats.length > 1 ? 's' : ''}) :\n\n` + 
-          resultats.map(r => `📄 **${r.nomFichier || 'Fichier inconnu'}**\n📂 Projet: ${r.labelProjet || '-'} | 📑 Type: ${r.typeDocument || 'Générique'}\n📝 ${r.resume || ''}`).join('\n\n');
-      } else if (motsRecherche.length === 0) {
-         botReply = "Pourriez-vous être un peu plus précis sur le fichier que vous recherchez ? (ex: 'Trouve moi la facture d'électricité')";
+        setMessages(prev => [...prev.slice(0, -1), { role: 'bot', text: botReply }]);
       }
-
-      setMessages(prev => [...prev, { role: 'bot', text: botReply }]);
-    }, 500);
+    } catch (error) {
+      setMessages(prev => [...prev.slice(0, -1), { role: 'bot', text: "❌ Erreur de communication avec le cerveau central." }]);
+    }
   };
 
+  // 🌟 Demander au PC d'ouvrir le dossier du fichier
+  const handleOpenFile = async (id: string) => {
+    try {
+      const response = await fetch(`http://localhost:3001/api/documents/${id}/open`, {
+        method: 'POST'
+      });
+      if (!response.ok) {
+        alert("❌ Impossible d'ouvrir l'emplacement du fichier.");
+      }
+    } catch (error) {
+      alert("⚠️ Erreur de communication avec le serveur local.");
+    }
+  };
+
+  // Téléchargement d'un fichier simple
   const handleDownload = async (doc: Document) => {
     try {
       const response = await fetch(`http://localhost:3001${doc.cheminStockage}`);
@@ -177,7 +176,45 @@ function App() {
     }
   };
 
-  // 🌟 LA FONCTION GÈRE MAINTENANT LES DEUX CAS (DÉFAUT OU PERSONNALISÉ)
+  // Re-classifier un document via l'IA
+  const handleReclassifyDocument = async (id: string) => {
+    try {
+      const response = await fetch(`http://localhost:3001/api/documents/${id}/reclassify`, {
+        method: 'POST'
+      });
+
+      if (response.ok) {
+        const docMisAJour = await response.json();
+        setDocuments(prev => prev.map(d => d.id === id ? docMisAJour : d));
+        alert("✅ L'IA a ré-analysé et mis à jour le document avec succès !");
+      } else {
+        alert("❌ L'IA n'a pas pu ré-analyser ce document.");
+      }
+    } catch (error) {
+      alert("⚠️ Erreur de communication avec l'IA.");
+    }
+  };
+
+  // Supprimer définitivement un document
+  const handleDeleteDocument = async (id: string) => {
+    if (!window.confirm("Voulez-vous vraiment supprimer définitivement ce document et son fichier ?")) return;
+
+    try {
+      const response = await fetch(`http://localhost:3001/api/documents/${id}`, {
+        method: 'DELETE'
+      });
+
+      if (response.ok) {
+        setDocuments(prev => prev.filter(d => d.id !== id));
+      } else {
+        alert("❌ Erreur lors de la suppression.");
+      }
+    } catch (error) {
+      alert("⚠️ Impossible de joindre le serveur.");
+    }
+  };
+
+  // Exportation d'un projet
   const handleDownloadProject = async (nomProjet: string, customPath: string | null) => {
     setExportingProject(nomProjet);
     
@@ -192,8 +229,8 @@ function App() {
       
       if (response.ok) {
         alert(`✅ PROJET EXPORTÉ AVEC SUCCÈS !\n\nL'arborescence a été créée ici :\n${data.chemin}`);
-        setExportModalProject(null); // Ferme le menu après succès
-        setCustomExportPath('');     // Réinitialise le champ
+        setExportModalProject(null);
+        setCustomExportPath('');
       } else {
         alert(`❌ Erreur : ${data.error}`);
       }
@@ -293,7 +330,7 @@ function App() {
              </div>
              <div style={{ marginTop: 'auto', paddingTop: '20px' }}>
                <form onSubmit={handleSendMessage} style={{ position: 'relative', display: 'flex', alignItems: 'center', boxShadow: '0 0 15px rgba(0,0,0,0.1)', borderRadius: '16px', backgroundColor: 'white', border: '1px solid #e5e5e5' }}>
-                 <input type="text" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Cherchez une marque, un prix, un type..." style={{ flex: 1, padding: '16px 20px', border: 'none', borderRadius: '16px', fontSize: '1rem', outline: 'none' }} />
+                 <input type="text" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Cherchez une facture, un schéma, un projet..." style={{ flex: 1, padding: '16px 20px', border: 'none', borderRadius: '16px', fontSize: '1rem', outline: 'none' }} />
                  <button type="submit" style={{ position: 'absolute', right: '10px', backgroundColor: input.trim() ? '#10a37f' : '#e5e5e5', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 12px', cursor: input.trim() ? 'pointer' : 'default' }}>➤</button>
                </form>
              </div>
@@ -317,7 +354,6 @@ function App() {
                     <button 
                       onClick={(e) => { 
                         e.stopPropagation(); 
-                        // Ouvre ou ferme le menu d'export
                         setExportModalProject(exportModalProject === projet ? null : projet); 
                       }}
                       style={{ backgroundColor: '#2563eb', color: 'white', border: 'none', borderRadius: '6px', padding: '8px 16px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px', transition: '0.2s' }}
@@ -326,13 +362,10 @@ function App() {
                     </button>
                   </div>
 
-                  {/* 🌟 LE NOUVEAU MENU DÉROULANT DES OPTIONS D'EXPORTATION */}
                   {exportModalProject === projet && (
                     <div style={{ padding: '15px 20px', backgroundColor: '#eff6ff', borderTop: '1px solid #bfdbfe', borderBottom: '1px solid #e5e5e5' }}>
                       <h4 style={{ margin: '0 0 10px 0', color: '#1e40af', fontSize: '0.95rem' }}>Où souhaitez-vous exporter ce projet ?</h4>
-                      
                       <div style={{ display: 'flex', gap: '15px', flexDirection: 'column' }}>
-                        {/* Option 1: Bureau */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                           <button 
                             onClick={() => handleDownloadProject(projet, null)}
@@ -343,12 +376,10 @@ function App() {
                           </button>
                           <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Crée un dossier sur votre Bureau Windows.</span>
                         </div>
-
-                        {/* Option 2: Personnalisé */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                           <input 
                             type="text" 
-                            placeholder="Ex: D:\Mes_Archives\Projets" 
+                            placeholder="Ex: D:\\Mes_Archives\\Projets" 
                             value={customExportPath}
                             onChange={(e) => setCustomExportPath(e.target.value)}
                             style={{ width: '220px', padding: '8px 12px', borderRadius: '6px', border: '1px solid #93c5fd', outline: 'none', fontSize: '0.85rem', boxSizing: 'border-box' }}
@@ -386,6 +417,13 @@ function App() {
                                       <div>
                                         <div style={{ fontWeight: '600', fontSize: '0.95rem', color: '#111827' }}>{doc?.nomFichier || 'Fichier Inconnu'}</div>
                                         <div style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: '4px' }}>{doc?.typeDocument || 'Générique'} - {doc?.resume}</div>
+                                        
+                                        <div style={{ display: 'flex', gap: '12px', fontSize: '0.75rem', color: '#64748b', marginBottom: '8px', backgroundColor: '#f1f5f9', padding: '4px 8px', borderRadius: '4px', display: 'inline-flex' }}>
+                                          <span>👤 {doc?.expediteur || 'Inconnu'}</span>
+                                          <span>📅 {doc?.dateReception ? new Date(doc.dateReception).toLocaleDateString('fr-FR', {day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'}) : '-'}</span>
+                                          <span>🌐 {doc?.plateforme || 'WhatsApp'}</span>
+                                        </div>
+
                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                                           {doc?.motsCles && doc.motsCles.split(',').map((tag, tIdx) => (
                                             <span key={tIdx} style={{ backgroundColor: '#e5e7eb', color: '#374151', fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', fontWeight: '500' }}>#{tag.trim()}</span>
@@ -393,7 +431,38 @@ function App() {
                                         </div>
                                       </div>
                                     </div>
-                                    <button onClick={() => handleDownload(doc)} style={{ backgroundColor: '#10a37f', color: 'white', border: 'none', borderRadius: '6px', padding: '8px 12px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px', transition: 'background 0.2s', alignSelf: 'flex-start' }}>⬇️ Télécharger</button>
+                                    
+                                    <div style={{ display: 'flex', gap: '6px', alignSelf: 'flex-start' }}>
+                                      <button 
+                                        onClick={() => handleOpenFile(doc.id)} 
+                                        style={{ backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '6px', padding: '8px 12px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: '500' }}
+                                        title="Ouvrir l'emplacement sur l'ordinateur"
+                                      >
+                                        📂
+                                      </button>
+                                      <button 
+                                        onClick={() => handleDownload(doc)} 
+                                        style={{ backgroundColor: '#10a37f', color: 'white', border: 'none', borderRadius: '6px', padding: '8px 12px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: '500' }}
+                                        title="Télécharger"
+                                      >
+                                        ⬇️
+                                      </button>
+                                      <button 
+                                        onClick={() => handleReclassifyDocument(doc.id)} 
+                                        style={{ backgroundColor: '#f59e0b', color: 'white', border: 'none', borderRadius: '6px', padding: '8px 12px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: '500' }}
+                                        title="Faire ré-analyser par l'IA"
+                                      >
+                                        🔄
+                                      </button>
+                                      <button 
+                                        onClick={() => handleDeleteDocument(doc.id)} 
+                                        style={{ backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: '6px', padding: '8px 12px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: '500' }}
+                                        title="Supprimer définitivement"
+                                      >
+                                        🗑️
+                                      </button>
+                                    </div>
+
                                   </div>
                                 ))}
                               </div>
@@ -437,7 +506,11 @@ function App() {
                         <tr key={doc?.id || i} style={{ borderBottom: i === documentsTries.length - 1 ? 'none' : '1px solid #f0f0f0', backgroundColor: 'white' }}>
                           <td style={{ padding: '15px' }}>
                             <div style={{ fontWeight: '600', color: '#111827' }}>📄 {doc?.nomFichier || 'Inconnu'}</div>
-                            <div style={{ fontSize: '0.8rem', color: '#6b7280', marginTop: '4px' }}>Type : {doc?.typeDocument || '-'}</div>
+                            <div style={{ fontSize: '0.8rem', color: '#6b7280', marginTop: '4px', marginBottom: '4px' }}>Type : {doc?.typeDocument || '-'}</div>
+                            <div style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                              <span>👤 {doc?.expediteur || '-'} ({doc?.plateforme || 'WhatsApp'})</span>
+                              <span>📅 {doc?.dateReception ? new Date(doc.dateReception).toLocaleDateString('fr-FR') : '-'}</span>
+                            </div>
                           </td>
                           <td style={{ padding: '15px' }}>
                             <div style={{ marginBottom: '6px' }}><span style={{ backgroundColor: '#e0f2fe', color: '#0369a1', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem' }}>{doc?.categorie || 'Inconnu'}</span></div>
